@@ -1,4 +1,4 @@
-name: Build Release APK
+name: CI – test & build
 
 on:
   push:
@@ -6,10 +6,12 @@ on:
       - main
       - master
   workflow_dispatch: {}
+  release:
+    types: [created]
 
 jobs:
   build:
-    name: Build Flutter release APK
+    name: Test and build APK
     runs-on: ubuntu-latest
 
     steps:
@@ -42,12 +44,35 @@ jobs:
         working-directory: love_app
         run: flutter pub get
 
+      - name: Run Flutter tests
+        working-directory: love_app
+        run: flutter test --coverage
+
       - name: Build release APK
         working-directory: love_app
         run: flutter build apk --release
 
-      - name: Upload release APK artifact
+      - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-release-apk
           path: love_app/build/app/outputs/flutter-apk/app-release.apk
+
+  publish_release:
+    name: Attach APK to GitHub release
+    needs: build
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: app-release-apk
+          path: apk
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: apk/love_app/build/app/outputs/flutter-apk/app-release.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
