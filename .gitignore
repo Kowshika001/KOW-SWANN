@@ -1,0 +1,103 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Android
+android/local.properties
+android/.gradle/
+android/captures/
+android/gradlew
+android/gradlew.bat
+android/.idea/
+android/*.iml
+android/*.keystore
+android/*.jks
+
+# iOS
+ios/.symlinks/
+ios/.generated/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/flutter_export_environment.sh
+ios/Flutter/ephemeral/
+ios/Podfile.lock
+ios/Pods/
+
+# macOS
+macos/Flutter/Flutter-Release.podspec
+macos/Flutter/ephemeral/
+macos/Podfile.lock
+macos/Pods/
+
+# Linux
+linux/flutter/ephemeral/flutter_linux/
+
+# Windows
+windows/flutter/ephemeral/
+
+# Web
+web/plugins/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Generated files
+*.tar.gz
+*.aar
+*.apk
+*.app
+*.aab
+*.ipa
+
+# Environment
+.env
+.env.example
+
+# OS
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+
+# Dependencies
+pubspec.lock
+.gradle/
+
+# IDEs
+*.sublime-workspace
+*.sublime-project
