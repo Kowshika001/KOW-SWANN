@@ -73,6 +73,6 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v1
         with:
-          files: apk/love_app/build/app/outputs/flutter-apk/app-release.apk
+          files: apk/app-release.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
