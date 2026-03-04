@@ -38,13 +38,15 @@ jobs:
             ${{ runner.os }}-flutter-
 
       - name: Flutter pub get
+        working-directory: love_app
         run: flutter pub get
 
       - name: Build release APK
+        working-directory: love_app
         run: flutter build apk --release
 
       - name: Upload release APK artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: app-release-apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: love_app/build/app/outputs/flutter-apk/app-release.apk
