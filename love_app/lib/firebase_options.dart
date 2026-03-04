@@ -2,27 +2,20 @@
 // ignore_for_file: type=lint
 
 import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
-import 'package:flutter_platform_interface/flutter_platform_interface.dart'
-    show defaultTargetPlatform, TargetPlatform;
+import 'dart:io';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 /// Default [FirebaseOptions] for use with your Firebase apps.
-///
-/// Example:
-/// ```dart
-/// import 'firebase_options.dart';
-/// // ...
-/// await Firebase.initializeApp(
-///   options: DefaultFirebaseOptions.currentPlatform,
-/// );
-/// ```
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
-    if (defaultTargetPlatform == TargetPlatform.android) {
+    if (Platform.isAndroid) {
       return android;
     }
-    if (defaultTargetPlatform == TargetPlatform.iOS) {
+    if (Platform.isIOS) {
       return ios;
+    }
+    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+      return android; // Use Android config for desktop testing
     }
     throw UnsupportedError(
       'DefaultFirebaseOptions are not supported for this platform.',
