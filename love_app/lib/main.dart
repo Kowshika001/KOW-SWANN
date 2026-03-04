@@ -13,7 +13,28 @@ import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: ".env");
+
+  // dotenv loads values from a file, but in CI/release builds we don't keep
+  // a `.env` file in source control for security.  Instead we rely on
+  // environment variables / `--dart-define` values.  When running locally
+  // during development you can still create a `.env` file in the project
+  // root; the build will pick it up automatically.
+  final envFile = File('.env');
+  if (await envFile.exists()) {
+    try {
+      await dotenv.load(fileName: '.env');
+    } catch (e) {
+      // in some build modes (desktop release) the file may be packaged or
+      // inaccessible even though `exists()` returned true; ignoring failures
+      // keeps the app running and allows using `--dart-define` instead.
+      debugPrint('dotenv load failed: $e');
+    }
+  }
+
+  // Accessing values later should use a fallback to `String.fromEnvironment`
+  // so that CI/release builds can still supply secrets via dart-defines.
+
+
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
@@ -22,6 +43,7 @@ void main() async {
     debugPrint('Firebase initialization error: $e');
     // Continue anyway - app can work without Firebase for testing
   }
+
   runApp(const MyApp());
 }
 
