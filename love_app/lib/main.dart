@@ -10,6 +10,9 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:path_provider/path_provider.dart';
 import 'firebase_options.dart';
+import 'features/couple_game/services/couple_game_storage.dart';
+import 'features/couple_game/state/couple_game_controller.dart';
+import 'features/couple_game/ui/screens/home_game_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,7 +36,6 @@ void main() async {
 
   // Accessing values later should use a fallback to `String.fromEnvironment`
   // so that CI/release builds can still supply secrets via dart-defines.
-
 
   try {
     await Firebase.initializeApp(
@@ -98,17 +100,19 @@ class _SplashScreenState extends State<SplashScreen> {
     final partnerName = prefs.getString('partnerName');
 
     if (yourName != null && partnerName != null && mounted) {
-      Navigator.of(context).pushReplacementNamed('/chat',
-          arguments: {'yourName': yourName, 'partnerName': partnerName});
+      Navigator.of(context).pushReplacementNamed(
+        '/chat',
+        arguments: {'yourName': yourName, 'partnerName': partnerName},
+      );
     }
   }
 
   Future<void> _saveNames() async {
     if (_yourNameController.text.isEmpty ||
         _partnerNameController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter both names')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Please enter both names')));
       return;
     }
 
@@ -117,10 +121,13 @@ class _SplashScreenState extends State<SplashScreen> {
     await prefs.setString('partnerName', _partnerNameController.text);
 
     if (mounted) {
-      Navigator.of(context).pushReplacementNamed('/chat', arguments: {
-        'yourName': _yourNameController.text,
-        'partnerName': _partnerNameController.text,
-      });
+      Navigator.of(context).pushReplacementNamed(
+        '/chat',
+        arguments: {
+          'yourName': _yourNameController.text,
+          'partnerName': _partnerNameController.text,
+        },
+      );
     }
   }
 
@@ -173,7 +180,9 @@ class _SplashScreenState extends State<SplashScreen> {
                   label: const Text('Start Chatting'),
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 32, vertical: 12),
+                      horizontal: 32,
+                      vertical: 12,
+                    ),
                     backgroundColor: Colors.pink,
                     foregroundColor: Colors.white,
                   ),
@@ -215,6 +224,7 @@ class _ChatScreenState extends State<ChatScreen> {
   FirebaseStorage? _storage;
   String? _conversationId;
   bool _useFirebase = false;
+  late final CoupleGameController _coupleGameController;
 
   @override
   void initState() {
@@ -231,6 +241,8 @@ class _ChatScreenState extends State<ChatScreen> {
       _useFirebase = false;
     }
     _initializeConversation();
+    _coupleGameController = CoupleGameController(storage: CoupleGameStorage())
+      ..load();
   }
 
   void _initializeConversation() {
@@ -251,11 +263,11 @@ class _ChatScreenState extends State<ChatScreen> {
             .doc(_conversationId)
             .collection('messages')
             .add({
-          'sender': widget.yourName,
-          'content': text,
-          'timestamp': FieldValue.serverTimestamp(),
-          'imageUrl': null,
-        });
+              'sender': widget.yourName,
+              'content': text,
+              'timestamp': FieldValue.serverTimestamp(),
+              'imageUrl': null,
+            });
       } else {
         // Fall back to local storage
         final prefs = await SharedPreferences.getInstance();
@@ -272,22 +284,25 @@ class _ChatScreenState extends State<ChatScreen> {
       }
       _messageController.clear();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error sending message: $e')),
-      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error sending message: $e')));
     }
   }
 
   Future<void> _sendImage() async {
-    final XFile? image =
-        await _imagePicker.pickImage(source: ImageSource.gallery);
+    final XFile? image = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+    );
 
     if (image == null || _conversationId == null) return;
 
     try {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Uploading image...')),
-      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Uploading image...')));
 
       if (_useFirebase && _storage != null && _firestore != null) {
         // Use Firebase Storage
@@ -307,11 +322,11 @@ class _ChatScreenState extends State<ChatScreen> {
             .doc(_conversationId)
             .collection('messages')
             .add({
-          'sender': widget.yourName,
-          'content': '',
-          'timestamp': FieldValue.serverTimestamp(),
-          'imageUrl': imageUrl,
-        });
+              'sender': widget.yourName,
+              'content': '',
+              'timestamp': FieldValue.serverTimestamp(),
+              'imageUrl': imageUrl,
+            });
       } else {
         // Fall back to local storage
         final appDir = await getApplicationDocumentsDirectory();
@@ -334,13 +349,15 @@ class _ChatScreenState extends State<ChatScreen> {
         setState(() {});
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Image sent!')),
-      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Image sent!')));
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error sending image: $e')),
-      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error sending image: $e')));
     }
   }
 
@@ -357,18 +374,13 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(
-            Icons.chat_bubble_outline,
-            size: 64,
-            color: Colors.grey,
-          ),
+          const Icon(Icons.chat_bubble_outline, size: 64, color: Colors.grey),
           const SizedBox(height: 16),
           Text(
             'No messages yet',
-            style: Theme.of(context)
-                .textTheme
-                .titleMedium
-                ?.copyWith(color: Colors.grey),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(color: Colors.grey),
           ),
           const SizedBox(height: 8),
           const Text('Send your first message!'),
@@ -386,6 +398,23 @@ class _ChatScreenState extends State<ChatScreen> {
         foregroundColor: Colors.white,
         backgroundColor: Colors.pink,
         elevation: 0,
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => HomeGameScreen(
+                controller: _coupleGameController,
+                yourName: widget.yourName,
+                partnerName: widget.partnerName,
+              ),
+            ),
+          );
+        },
+        icon: const Text('💑', style: TextStyle(fontSize: 18)),
+        label: const Text('Nous Deux'),
+        backgroundColor: Colors.pink,
+        foregroundColor: Colors.white,
       ),
       body: _conversationId == null
           ? const Center(child: CircularProgressIndicator())
@@ -424,21 +453,19 @@ class _ChatScreenState extends State<ChatScreen> {
                               reverse: true,
                               itemCount: messages.length,
                               itemBuilder: (context, index) {
-                                final messageData = messages[index].data()
-                                    as Map<String, dynamic>;
+                                final messageData =
+                                    messages[index].data()
+                                        as Map<String, dynamic>;
                                 final message = Message(
                                   sender: messageData['sender'] ?? '',
                                   content: messageData['content'] ?? '',
-                                  timestamp: messageData['timestamp'] !=
-                                          null
-                                      ? (messageData['timestamp']
-                                              as Timestamp)
-                                          .toDate()
+                                  timestamp: messageData['timestamp'] != null
+                                      ? (messageData['timestamp'] as Timestamp)
+                                            .toDate()
                                       : DateTime.now(),
                                   imageUrl: messageData['imageUrl'],
                                 );
-                                final isYou =
-                                    message.sender == widget.yourName;
+                                final isYou = message.sender == widget.yourName;
 
                                 return MessageBubble(
                                   message: message,
@@ -470,8 +497,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               itemBuilder: (context, index) {
                                 final message =
                                     messages[messages.length - 1 - index];
-                                final isYou =
-                                    message.sender == widget.yourName;
+                                final isYou = message.sender == widget.yourName;
 
                                 return MessageBubble(
                                   message: message,
@@ -501,7 +527,9 @@ class _ChatScreenState extends State<ChatScreen> {
                               borderSide: const BorderSide(color: Colors.pink),
                             ),
                             contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 12),
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
                           ),
                           maxLines: null,
                           textInputAction: TextInputAction.send,
@@ -536,11 +564,7 @@ class MessageBubble extends StatelessWidget {
   final Message message;
   final bool isYou;
 
-  const MessageBubble({
-    super.key,
-    required this.message,
-    required this.isYou,
-  });
+  const MessageBubble({super.key, required this.message, required this.isYou});
 
   @override
   Widget build(BuildContext context) {
@@ -549,8 +573,9 @@ class MessageBubble extends StatelessWidget {
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
         child: Column(
-          crossAxisAlignment:
-              isYou ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment: isYou
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           children: [
             if (message.imageUrl != null && message.imageUrl!.isNotEmpty)
               Container(
@@ -570,16 +595,15 @@ class MessageBubble extends StatelessWidget {
                             );
                           },
                         )
-                      : Image.file(
-                          File(message.imageUrl!),
-                          fit: BoxFit.cover,
-                        ),
+                      : Image.file(File(message.imageUrl!), fit: BoxFit.cover),
                 ),
               ),
             if (message.content.isNotEmpty)
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: isYou ? Colors.pink : Colors.grey[200],
                   borderRadius: BorderRadius.circular(12),

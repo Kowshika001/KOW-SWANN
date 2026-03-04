@@ -44,6 +44,9 @@ dependencies:
   firebase_storage: ^11.5.0
   flutter_dotenv: ^5.1.0
   path_provider: ^2.1.0
+  google_fonts: ^6.2.1
+  animated_text_kit: ^4.2.3
+  confetti: ^0.8.0
 
 dev_dependencies:
   flutter_test:
