@@ -136,14 +136,18 @@ class _RevealScreenState extends State<RevealScreen> {
                                   answer.partnerAnswer,
                                   style: GoogleFonts.nunito(fontSize: 16),
                                 ),
-                                const SizedBox(height: 12),
-                                Text(
-                                  widget.controller.randomPromptForPartner(),
-                                  style: GoogleFonts.nunito(
-                                    fontSize: 13,
-                                    color: Colors.deepPurple,
+                                if (answer.partnerAnswer ==
+                                    CoupleGameController
+                                        .waitingPartnerText) ...[
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    widget.controller.randomPromptForPartner(),
+                                    style: GoogleFonts.nunito(
+                                      fontSize: 13,
+                                      color: Colors.deepPurple,
+                                    ),
                                   ),
-                                ),
+                                ],
                               ],
                             ),
                           ),

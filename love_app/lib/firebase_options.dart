@@ -5,6 +5,26 @@ import 'package:firebase_core/firebase_core.dart' show FirebaseOptions;
 import 'dart:io';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
+String _requiredEnv(String key) {
+  final value = dotenv.env[key]?.trim();
+  final invalid =
+      value == null ||
+      value.isEmpty ||
+      value.startsWith('YOUR_') ||
+      value.contains('_here') ||
+      value.startsWith('your-') ||
+      value.startsWith('your_');
+
+  if (invalid) {
+    throw StateError(
+      'Variable Firebase invalide: $key. '
+      'Mets une vraie valeur dans .env (pas un placeholder).',
+    );
+  }
+
+  return value;
+}
+
 /// Default [FirebaseOptions] for use with your Firebase apps.
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
@@ -24,24 +44,24 @@ class DefaultFirebaseOptions {
 
   static FirebaseOptions get android {
     return FirebaseOptions(
-      apiKey: dotenv.env['FIREBASE_API_KEY'] ?? 'YOUR_ANDROID_API_KEY',
-      appId: dotenv.env['FIREBASE_APP_ID'] ?? 'YOUR_ANDROID_APP_ID',
-      messagingSenderId: dotenv.env['FIREBASE_MESSAGING_SENDER_ID'] ?? 'YOUR_MESSAGING_SENDER_ID',
-      projectId: dotenv.env['FIREBASE_PROJECT_ID'] ?? 'your-flutter-love-app',
-      databaseURL: dotenv.env['FIREBASE_DATABASE_URL'] ?? 'https://your-flutter-love-app.firebaseio.com',
-      storageBucket: dotenv.env['FIREBASE_STORAGE_BUCKET'] ?? 'your-flutter-love-app.appspot.com',
+      apiKey: _requiredEnv('FIREBASE_API_KEY'),
+      appId: _requiredEnv('FIREBASE_APP_ID'),
+      messagingSenderId: _requiredEnv('FIREBASE_MESSAGING_SENDER_ID'),
+      projectId: _requiredEnv('FIREBASE_PROJECT_ID'),
+      databaseURL: _requiredEnv('FIREBASE_DATABASE_URL'),
+      storageBucket: _requiredEnv('FIREBASE_STORAGE_BUCKET'),
     );
   }
 
   static FirebaseOptions get ios {
     return FirebaseOptions(
-      apiKey: dotenv.env['FIREBASE_IOS_API_KEY'] ?? 'YOUR_IOS_API_KEY',
-      appId: dotenv.env['FIREBASE_IOS_APP_ID'] ?? 'YOUR_IOS_APP_ID',
-      messagingSenderId: dotenv.env['FIREBASE_MESSAGING_SENDER_ID'] ?? 'YOUR_MESSAGING_SENDER_ID',
-      projectId: dotenv.env['FIREBASE_PROJECT_ID'] ?? 'your-flutter-love-app',
-      databaseURL: dotenv.env['FIREBASE_DATABASE_URL'] ?? 'https://your-flutter-love-app.firebaseio.com',
-      storageBucket: dotenv.env['FIREBASE_STORAGE_BUCKET'] ?? 'your-flutter-love-app.appspot.com',
-      iosBundleId: dotenv.env['FIREBASE_IOS_BUNDLE_ID'] ?? 'com.example.loveapp',
+      apiKey: _requiredEnv('FIREBASE_IOS_API_KEY'),
+      appId: _requiredEnv('FIREBASE_IOS_APP_ID'),
+      messagingSenderId: _requiredEnv('FIREBASE_MESSAGING_SENDER_ID'),
+      projectId: _requiredEnv('FIREBASE_PROJECT_ID'),
+      databaseURL: _requiredEnv('FIREBASE_DATABASE_URL'),
+      storageBucket: _requiredEnv('FIREBASE_STORAGE_BUCKET'),
+      iosBundleId: _requiredEnv('FIREBASE_IOS_BUNDLE_ID'),
     );
   }
 }

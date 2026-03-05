@@ -1,133 +1,293 @@
-import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:intl/intl.dart';
+import 'dart:async';
 import 'dart:io';
-import 'dart:convert';
-import 'package:firebase_core/firebase_core.dart';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
-import 'package:path_provider/path_provider.dart';
-import 'firebase_options.dart';
-import 'features/couple_game/services/couple_game_storage.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
+
 import 'features/couple_game/state/couple_game_controller.dart';
 import 'features/couple_game/ui/screens/home_game_screen.dart';
+import 'firebase_options.dart';
+import 'services/push_notification_service.dart';
+
+const bool kUseFirebaseEmulators = bool.fromEnvironment(
+  'USE_FIREBASE_EMULATORS',
+  defaultValue: false,
+);
+const String kFirebaseEmulatorHost = String.fromEnvironment(
+  'FIREBASE_EMULATOR_HOST',
+  defaultValue: '10.0.2.2',
+);
+
+bool _envBool(String key, {bool defaultValue = false}) {
+  final raw = dotenv.env[key]?.trim().toLowerCase();
+  if (raw == null || raw.isEmpty) return defaultValue;
+  return raw == '1' || raw == 'true' || raw == 'yes' || raw == 'on';
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // dotenv loads values from a file, but in CI/release builds we don't keep
-  // a `.env` file in source control for security.  Instead we rely on
-  // environment variables / `--dart-define` values.  When running locally
-  // during development you can still create a `.env` file in the project
-  // root; the build will pick it up automatically.
-  final envFile = File('.env');
-  if (await envFile.exists()) {
-    try {
-      await dotenv.load(fileName: '.env');
-    } catch (e) {
-      // in some build modes (desktop release) the file may be packaged or
-      // inaccessible even though `exists()` returned true; ignoring failures
-      // keeps the app running and allows using `--dart-define` instead.
-      debugPrint('dotenv load failed: $e');
-    }
-  }
+  String? firebaseInitError;
+  var useFirebaseEmulators = kUseFirebaseEmulators;
+  var firebaseEmulatorHost = kFirebaseEmulatorHost;
 
-  // Accessing values later should use a fallback to `String.fromEnvironment`
-  // so that CI/release builds can still supply secrets via dart-defines.
+  try {
+    await dotenv.load(fileName: '.env');
+    useFirebaseEmulators = useFirebaseEmulators || _envBool('USE_FIREBASE_EMULATORS');
+    final hostFromEnv = dotenv.env['FIREBASE_EMULATOR_HOST']?.trim();
+    if (hostFromEnv != null && hostFromEnv.isNotEmpty) {
+      firebaseEmulatorHost = hostFromEnv;
+    }
+  } catch (e) {
+    debugPrint('dotenv load failed: $e');
+  }
 
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
+
+    if (useFirebaseEmulators) {
+      debugPrint(
+        'Firebase emulators ENABLED -> host=$firebaseEmulatorHost',
+      );
+      FirebaseAuth.instance.useAuthEmulator(firebaseEmulatorHost, 9099);
+      FirebaseFirestore.instance.useFirestoreEmulator(
+        firebaseEmulatorHost,
+        8080,
+      );
+      FirebaseStorage.instance.useStorageEmulator(firebaseEmulatorHost, 9199);
+    } else {
+      try {
+        await FirebaseAppCheck.instance.activate(
+          androidProvider: kDebugMode
+              ? AndroidProvider.debug
+              : AndroidProvider.playIntegrity,
+          appleProvider: kDebugMode
+              ? AppleProvider.debug
+              : AppleProvider.deviceCheck,
+        );
+      } catch (e) {
+        debugPrint('Firebase App Check activation failed: $e');
+      }
+    }
+
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+    await PushNotificationService.instance.initialize();
   } catch (e) {
+    firebaseInitError = e.toString();
     debugPrint('Firebase initialization error: $e');
-    // Continue anyway - app can work without Firebase for testing
   }
 
-  runApp(const MyApp());
+  runApp(MyApp(firebaseInitError: firebaseInitError));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  const MyApp({super.key, this.firebaseInitError});
+
+  final String? firebaseInitError;
 
   @override
   Widget build(BuildContext context) {
+    final firebaseReady = Firebase.apps.isNotEmpty;
+
     return MaterialApp(
       title: 'Love Messages',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.pink),
         useMaterial3: true,
       ),
-      home: const SplashScreen(),
-      onGenerateRoute: (settings) {
-        if (settings.name == '/chat') {
-          final args = settings.arguments as Map<String, String>;
-          return MaterialPageRoute(
-            builder: (context) => ChatScreen(
-              yourName: args['yourName']!,
-              partnerName: args['partnerName']!,
-            ),
+      home: firebaseReady
+          ? const AuthGate()
+          : FirebaseRequiredScreen(errorMessage: firebaseInitError),
+    );
+  }
+}
+
+class FirebaseRequiredScreen extends StatelessWidget {
+  const FirebaseRequiredScreen({super.key, this.errorMessage});
+
+  final String? errorMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.cloud_off, color: Colors.pink, size: 72),
+              const SizedBox(height: 16),
+              const Text(
+                'Love Messages',
+                style: TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.pink,
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Firebase n\'est pas initialisé. Vérifie firebase_options.dart et la config Android.',
+                textAlign: TextAlign.center,
+              ),
+              if ((errorMessage ?? '').isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Détail: $errorMessage',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
           );
         }
-        return null;
+
+        final user = snapshot.data;
+        if (user == null) {
+          unawaited(PushNotificationService.instance.clearUserTokenBinding());
+          return const AuthScreen();
+        }
+
+        unawaited(PushNotificationService.instance.registerUserToken(user.uid));
+        return HomeRouter(user: user);
       },
     );
   }
 }
 
-class SplashScreen extends StatefulWidget {
-  const SplashScreen({super.key});
+class AuthScreen extends StatefulWidget {
+  const AuthScreen({super.key});
 
   @override
-  State<SplashScreen> createState() => _SplashScreenState();
+  State<AuthScreen> createState() => _AuthScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> {
-  final TextEditingController _yourNameController = TextEditingController();
-  final TextEditingController _partnerNameController = TextEditingController();
+class _AuthScreenState extends State<AuthScreen> {
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
 
-  @override
-  void initState() {
-    super.initState();
-    _checkNames();
+  bool _isRegisterMode = false;
+  bool _loading = false;
+
+  FirebaseAuth get _auth => FirebaseAuth.instance;
+  FirebaseFirestore get _firestore => FirebaseFirestore.instance;
+
+  String _normalizeUsername(String value) {
+    final lower = value.trim().toLowerCase().replaceAll(' ', '_');
+    return lower.replaceAll(RegExp(r'[^a-z0-9_.-]'), '');
   }
 
-  Future<void> _checkNames() async {
-    final prefs = await SharedPreferences.getInstance();
-    final yourName = prefs.getString('yourName');
-    final partnerName = prefs.getString('partnerName');
-
-    if (yourName != null && partnerName != null && mounted) {
-      Navigator.of(context).pushReplacementNamed(
-        '/chat',
-        arguments: {'yourName': yourName, 'partnerName': partnerName},
-      );
-    }
-  }
-
-  Future<void> _saveNames() async {
-    if (_yourNameController.text.isEmpty ||
-        _partnerNameController.text.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Please enter both names')));
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) {
       return;
     }
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('yourName', _yourNameController.text);
-    await prefs.setString('partnerName', _partnerNameController.text);
+    final username = _normalizeUsername(_usernameController.text);
+    final password = _passwordController.text.trim();
+    final email = '$username@loveapp.local';
 
-    if (mounted) {
-      Navigator.of(context).pushReplacementNamed(
-        '/chat',
-        arguments: {
-          'yourName': _yourNameController.text,
-          'partnerName': _partnerNameController.text,
-        },
+    setState(() {
+      _loading = true;
+    });
+
+    try {
+      if (_isRegisterMode) {
+        final cred = await _auth.createUserWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+
+        try {
+          await _firestore.runTransaction((tx) async {
+            final usernameRef = _firestore
+                .collection('usernames')
+                .doc(username);
+            final usernameSnap = await tx.get(usernameRef);
+            if (usernameSnap.exists) {
+              throw Exception('Ce pseudo est déjà utilisé.');
+            }
+
+            tx.set(usernameRef, {
+              'uid': cred.user!.uid,
+              'createdAt': FieldValue.serverTimestamp(),
+            });
+
+            tx.set(_firestore.collection('users').doc(cred.user!.uid), {
+              'username': username,
+              'usernameLower': username,
+              'createdAt': FieldValue.serverTimestamp(),
+              'lastSeenAt': FieldValue.serverTimestamp(),
+              'activePairId': null,
+            });
+          });
+        } catch (e) {
+          await cred.user?.delete();
+          rethrow;
+        }
+      } else {
+        final cred = await _auth.signInWithEmailAndPassword(
+          email: email,
+          password: password,
+        );
+
+        await _firestore.collection('users').doc(cred.user!.uid).set({
+          'username': username,
+          'usernameLower': username,
+          'lastSeenAt': FieldValue.serverTimestamp(),
+          'createdAt': FieldValue.serverTimestamp(),
+          'activePairId': null,
+        }, SetOptions(merge: true));
+
+        await _firestore.collection('usernames').doc(username).set({
+          'uid': cred.user!.uid,
+          'createdAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Auth erreur: ${e.message ?? e.code}')),
       );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
     }
   }
 
@@ -137,57 +297,93 @@ class _SplashScreenState extends State<SplashScreen> {
       body: Center(
         child: SingleChildScrollView(
           child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.favorite, size: 80, color: Colors.pink),
-                const SizedBox(height: 24),
-                const Text(
-                  'Love Messages',
-                  style: TextStyle(
-                    fontSize: 32,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.pink,
-                  ),
-                ),
-                const SizedBox(height: 48),
-                TextField(
-                  controller: _yourNameController,
-                  decoration: InputDecoration(
-                    labelText: 'Your Name',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
+            padding: const EdgeInsets.all(24),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                children: [
+                  const Icon(Icons.favorite, size: 80, color: Colors.pink),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'Love Messages',
+                    style: TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.pink,
                     ),
-                    prefixIcon: const Icon(Icons.person),
                   ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _partnerNameController,
-                  decoration: InputDecoration(
-                    labelText: "Your Partner's Name",
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
+                  const SizedBox(height: 10),
+                  Text(
+                    _isRegisterMode ? 'Créer un compte' : 'Se connecter',
+                    style: const TextStyle(fontSize: 16),
+                  ),
+                  const SizedBox(height: 28),
+                  TextFormField(
+                    controller: _usernameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Nom d\'utilisateur',
+                      prefixIcon: Icon(Icons.person),
                     ),
-                    prefixIcon: const Icon(Icons.favorite),
+                    validator: (value) {
+                      final normalized = _normalizeUsername(value ?? '');
+                      if (normalized.length < 3) {
+                        return 'Pseudo minimum 3 caractères';
+                      }
+                      return null;
+                    },
                   ),
-                ),
-                const SizedBox(height: 32),
-                ElevatedButton.icon(
-                  onPressed: _saveNames,
-                  icon: const Icon(Icons.check),
-                  label: const Text('Start Chatting'),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 32,
-                      vertical: 12,
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _passwordController,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Mot de passe',
+                      prefixIcon: Icon(Icons.lock),
                     ),
-                    backgroundColor: Colors.pink,
-                    foregroundColor: Colors.white,
+                    validator: (value) {
+                      if ((value ?? '').length < 6) {
+                        return 'Mot de passe minimum 6 caractères';
+                      }
+                      return null;
+                    },
                   ),
-                ),
-              ],
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _loading ? null : _submit,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.pink,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      child: _loading
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Text(
+                              _isRegisterMode ? 'Créer le compte' : 'Connexion',
+                            ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _loading
+                        ? null
+                        : () {
+                            setState(() {
+                              _isRegisterMode = !_isRegisterMode;
+                            });
+                          },
+                    child: Text(
+                      _isRegisterMode
+                          ? 'Déjà un compte ? Se connecter'
+                          : 'Pas de compte ? S\'inscrire',
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -197,21 +393,496 @@ class _SplashScreenState extends State<SplashScreen> {
 
   @override
   void dispose() {
-    _yourNameController.dispose();
-    _partnerNameController.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+}
+
+class HomeRouter extends StatelessWidget {
+  const HomeRouter({super.key, required this.user});
+
+  final User user;
+
+  @override
+  Widget build(BuildContext context) {
+    final userRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid);
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: userRef.snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final data = snapshot.data?.data();
+        if (data == null) {
+          return const Scaffold(
+            body: Center(child: Text('Profil introuvable. Reconnecte-toi.')),
+          );
+        }
+
+        final myUsername = (data['username'] as String?) ?? 'unknown';
+        final activePairId = data['activePairId'] as String?;
+
+        if (activePairId == null || activePairId.isEmpty) {
+          return PairingScreen(myUid: user.uid, myUsername: myUsername);
+        }
+
+        return MainMenuScreen(
+          myUid: user.uid,
+          myUsername: myUsername,
+          pairId: activePairId,
+        );
+      },
+    );
+  }
+}
+
+class PairingScreen extends StatefulWidget {
+  const PairingScreen({
+    super.key,
+    required this.myUid,
+    required this.myUsername,
+  });
+
+  final String myUid;
+  final String myUsername;
+
+  @override
+  State<PairingScreen> createState() => _PairingScreenState();
+}
+
+class _PairingScreenState extends State<PairingScreen> {
+  final TextEditingController _searchController = TextEditingController();
+  List<QueryDocumentSnapshot<Map<String, dynamic>>> _results = [];
+  bool _searching = false;
+
+  FirebaseFirestore get _firestore => FirebaseFirestore.instance;
+
+  Future<void> _searchUsers() async {
+    final prefix = _searchController.text.trim().toLowerCase();
+    if (prefix.isEmpty) {
+      setState(() {
+        _results = [];
+      });
+      return;
+    }
+
+    setState(() {
+      _searching = true;
+    });
+
+    final query = await _firestore
+        .collection('users')
+        .orderBy('usernameLower')
+        .startAt([prefix])
+        .endAt(['$prefix\uf8ff'])
+        .limit(10)
+        .get();
+
+    if (!mounted) return;
+
+    setState(() {
+      _results = query.docs.where((doc) => doc.id != widget.myUid).toList();
+      _searching = false;
+    });
+  }
+
+  Future<void> _sendRequest(Map<String, dynamic> targetUser) async {
+    final targetUid = targetUser['uid'] as String;
+    final targetUsername = targetUser['username'] as String? ?? 'unknown';
+
+    final requestId = '${widget.myUid}_$targetUid';
+    await _firestore.collection('pairRequests').doc(requestId).set({
+      'fromUid': widget.myUid,
+      'fromUsername': widget.myUsername,
+      'toUid': targetUid,
+      'toUsername': targetUsername,
+      'status': 'pending',
+      'createdAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Demande envoyée à @$targetUsername')),
+    );
+  }
+
+  Future<void> _acceptRequest(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) async {
+    final data = doc.data();
+    final fromUid = data['fromUid'] as String;
+    final fromUsername = data['fromUsername'] as String? ?? 'unknown';
+
+    final sorted = [fromUid, widget.myUid]..sort();
+    final pairId = '${sorted[0]}__${sorted[1]}';
+
+    await _firestore.runTransaction((tx) async {
+      final meRef = _firestore.collection('users').doc(widget.myUid);
+      final otherRef = _firestore.collection('users').doc(fromUid);
+      final pairRef = _firestore.collection('pairs').doc(pairId);
+
+      final meSnap = await tx.get(meRef);
+      final otherSnap = await tx.get(otherRef);
+
+      final mePair = meSnap.data()?['activePairId'] as String?;
+      final otherPair = otherSnap.data()?['activePairId'] as String?;
+
+      if ((mePair ?? '').isNotEmpty || (otherPair ?? '').isNotEmpty) {
+        throw Exception('Un utilisateur est déjà en couple actif.');
+      }
+
+      tx.set(pairRef, {
+        'members': [widget.myUid, fromUid],
+        'memberUsernames': {
+          widget.myUid: widget.myUsername,
+          fromUid: fromUsername,
+        },
+        'compatibilityScore': 0,
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      tx.update(meRef, {'activePairId': pairId});
+      tx.update(otherRef, {'activePairId': pairId});
+      tx.update(doc.reference, {
+        'status': 'accepted',
+        'pairId': pairId,
+        'acceptedAt': FieldValue.serverTimestamp(),
+      });
+    });
+  }
+
+  Future<void> _declineRequest(
+    DocumentReference<Map<String, dynamic>> requestRef,
+  ) {
+    return requestRef.update({
+      'status': 'declined',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final incomingStream = _firestore
+        .collection('pairRequests')
+        .where('toUid', isEqualTo: widget.myUid)
+        .where('status', isEqualTo: 'pending')
+        .snapshots();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('@${widget.myUsername}'),
+        backgroundColor: Colors.pink,
+        foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout),
+            onPressed: () => FirebaseAuth.instance.signOut(),
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Trouver ta moitié par pseudo 💕',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: const InputDecoration(
+                      hintText: 'Rechercher un pseudo',
+                      border: OutlineInputBorder(),
+                    ),
+                    onSubmitted: (_) => _searchUsers(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: _searching ? null : _searchUsers,
+                  child: const Text('Chercher'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_searching) const LinearProgressIndicator(),
+            Expanded(
+              child: ListView(
+                children: [
+                  ..._results.map((doc) {
+                    final data = doc.data();
+                    final username = data['username'] as String? ?? 'unknown';
+
+                    return ListTile(
+                      leading: const Icon(Icons.person),
+                      title: Text('@$username'),
+                      trailing: ElevatedButton(
+                        onPressed: () =>
+                            _sendRequest({'uid': doc.id, 'username': username}),
+                        child: const Text('Inviter'),
+                      ),
+                    );
+                  }),
+                  const Divider(),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: Text(
+                      'Demandes reçues',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: incomingStream,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Padding(
+                          padding: EdgeInsets.all(8),
+                          child: LinearProgressIndicator(),
+                        );
+                      }
+
+                      final docs = snapshot.data?.docs ?? [];
+                      if (docs.isEmpty) {
+                        return const ListTile(
+                          title: Text('Aucune demande reçue.'),
+                        );
+                      }
+
+                      return Column(
+                        children: docs.map((doc) {
+                          final data = doc.data();
+                          final fromUsername =
+                              data['fromUsername'] as String? ?? 'unknown';
+
+                          return ListTile(
+                            title: Text('@$fromUsername veut se connecter'),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  onPressed: () => _acceptRequest(doc),
+                                  icon: const Icon(
+                                    Icons.check,
+                                    color: Colors.green,
+                                  ),
+                                ),
+                                IconButton(
+                                  onPressed: () =>
+                                      _declineRequest(doc.reference),
+                                  icon: const Icon(
+                                    Icons.close,
+                                    color: Colors.red,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+}
+
+class MainMenuScreen extends StatefulWidget {
+  const MainMenuScreen({
+    super.key,
+    required this.myUid,
+    required this.myUsername,
+    required this.pairId,
+  });
+
+  final String myUid;
+  final String myUsername;
+  final String pairId;
+
+  @override
+  State<MainMenuScreen> createState() => _MainMenuScreenState();
+}
+
+class _MainMenuScreenState extends State<MainMenuScreen> {
+  CoupleGameController? _coupleGameController;
+  String? _controllerPairId;
+
+  FirebaseFirestore get _firestore => FirebaseFirestore.instance;
+
+  Future<void> _leavePair() async {
+    await _firestore.collection('users').doc(widget.myUid).update({
+      'activePairId': null,
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pairStream = _firestore
+        .collection('pairs')
+        .doc(widget.pairId)
+        .snapshots();
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: pairStream,
+      builder: (context, pairSnapshot) {
+        if (pairSnapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final pairData = pairSnapshot.data?.data();
+        if (pairData == null) {
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('Pair introuvable'),
+              backgroundColor: Colors.pink,
+              foregroundColor: Colors.white,
+            ),
+            body: Center(
+              child: ElevatedButton(
+                onPressed: _leavePair,
+                child: const Text('Revenir à la recherche'),
+              ),
+            ),
+          );
+        }
+
+        final members = (pairData['members'] as List<dynamic>? ?? [])
+            .map((e) => '$e')
+            .toList();
+        final partnerUid = members.firstWhere(
+          (uid) => uid != widget.myUid,
+          orElse: () => '',
+        );
+
+        final usernames =
+            (pairData['memberUsernames'] as Map<String, dynamic>? ?? {}).map(
+              (key, value) => MapEntry(key, '$value'),
+            );
+        final partnerName = usernames[partnerUid] ?? 'partner';
+
+        if (_controllerPairId != widget.pairId && partnerUid.isNotEmpty) {
+          _coupleGameController?.dispose();
+          _coupleGameController = CoupleGameController.online(
+            firestore: _firestore,
+            pairId: widget.pairId,
+            currentUid: widget.myUid,
+            partnerUid: partnerUid,
+          )..load();
+          _controllerPairId = widget.pairId;
+        }
+
+        return Scaffold(
+          appBar: AppBar(
+            title: Text('${widget.myUsername} & $partnerName'),
+            centerTitle: true,
+            backgroundColor: Colors.pink,
+            foregroundColor: Colors.white,
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.logout),
+                onPressed: () => FirebaseAuth.instance.signOut(),
+              ),
+            ],
+          ),
+          body: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.chat_bubble_outline),
+                  label: const Text('Chatter'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.pink,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ChatScreen(
+                          myUid: widget.myUid,
+                          myUsername: widget.myUsername,
+                          pairId: widget.pairId,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 16),
+                ElevatedButton.icon(
+                  icon: const Text('💑', style: TextStyle(fontSize: 20)),
+                  label: const Text('Nous deux'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.deepPurple,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                  ),
+                  onPressed: _coupleGameController == null
+                      ? null
+                      : () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => HomeGameScreen(
+                                controller: _coupleGameController!,
+                                yourName: widget.myUsername,
+                                partnerName: partnerName,
+                              ),
+                            ),
+                          );
+                        },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _coupleGameController?.dispose();
     super.dispose();
   }
 }
 
 class ChatScreen extends StatefulWidget {
-  final String yourName;
-  final String partnerName;
-
   const ChatScreen({
     super.key,
-    required this.yourName,
-    required this.partnerName,
+    required this.myUid,
+    required this.myUsername,
+    required this.pairId,
   });
+
+  final String myUid;
+  final String myUsername;
+  final String pairId;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -220,336 +891,233 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final ImagePicker _imagePicker = ImagePicker();
-  FirebaseFirestore? _firestore;
-  FirebaseStorage? _storage;
-  String? _conversationId;
-  bool _useFirebase = false;
-  late final CoupleGameController _coupleGameController;
 
-  @override
-  void initState() {
-    super.initState();
-    // Check if Firebase is initialized
-    try {
-      if (Firebase.apps.isNotEmpty) {
-        _firestore = FirebaseFirestore.instance;
-        _storage = FirebaseStorage.instance;
-        _useFirebase = true;
-      }
-    } catch (e) {
-      debugPrint('Firebase not available: $e');
-      _useFirebase = false;
-    }
-    _initializeConversation();
-    _coupleGameController = CoupleGameController(storage: CoupleGameStorage())
-      ..load();
-  }
-
-  void _initializeConversation() {
-    // Create a unique conversation ID based on names (sorted to ensure consistency)
-    final names = [widget.yourName, widget.partnerName];
-    names.sort();
-    _conversationId = names.join('_').toLowerCase();
-  }
+  FirebaseFirestore get _firestore => FirebaseFirestore.instance;
+  FirebaseStorage get _storage => FirebaseStorage.instance;
 
   Future<void> _sendMessage(String text) async {
-    if (text.isEmpty || _conversationId == null) return;
+    final sanitized = text.trim();
+    if (sanitized.isEmpty) return;
 
     try {
-      if (_useFirebase && _firestore != null) {
-        // Use Firebase
-        await _firestore!
-            .collection('conversations')
-            .doc(_conversationId)
-            .collection('messages')
-            .add({
-              'sender': widget.yourName,
-              'content': text,
-              'timestamp': FieldValue.serverTimestamp(),
-              'imageUrl': null,
-            });
-      } else {
-        // Fall back to local storage
-        final prefs = await SharedPreferences.getInstance();
-        final message = Message(
-          sender: widget.yourName,
-          content: text,
-          timestamp: DateTime.now(),
-          imageUrl: null,
-        );
-        final messagesJson = prefs.getStringList('messages') ?? [];
-        messagesJson.add(jsonEncode(message.toJson()));
-        await prefs.setStringList('messages', messagesJson);
-        setState(() {});
-      }
+      await _firestore
+          .collection('pairs')
+          .doc(widget.pairId)
+          .collection('messages')
+          .add({
+            'senderUid': widget.myUid,
+            'senderUsername': widget.myUsername,
+            'type': 'text',
+            'text': sanitized,
+            'imageUrl': null,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
       _messageController.clear();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error sending message: $e')));
+      ).showSnackBar(SnackBar(content: Text('Erreur envoi message: $e')));
     }
   }
 
   Future<void> _sendImage() async {
-    final XFile? image = await _imagePicker.pickImage(
-      source: ImageSource.gallery,
-    );
-
-    if (image == null || _conversationId == null) return;
+    final image = await _imagePicker.pickImage(source: ImageSource.gallery);
+    if (image == null) return;
 
     try {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Uploading image...')));
+      ).showSnackBar(const SnackBar(content: Text('Upload image en cours...')));
 
-      if (_useFirebase && _storage != null && _firestore != null) {
-        // Use Firebase Storage
-        final fileName =
-            'img_${DateTime.now().millisecondsSinceEpoch}_${image.name}';
-        final ref = _storage!
-            .ref()
-            .child('conversations')
-            .child(_conversationId!)
-            .child(fileName);
+      final msgRef = _firestore
+          .collection('pairs')
+          .doc(widget.pairId)
+          .collection('messages')
+          .doc();
 
-        await ref.putFile(File(image.path));
-        final imageUrl = await ref.getDownloadURL();
+      final storageRef = _storage.ref().child(
+        'pairs/${widget.pairId}/chat/${msgRef.id}.jpg',
+      );
 
-        await _firestore!
-            .collection('conversations')
-            .doc(_conversationId)
-            .collection('messages')
-            .add({
-              'sender': widget.yourName,
-              'content': '',
-              'timestamp': FieldValue.serverTimestamp(),
-              'imageUrl': imageUrl,
-            });
-      } else {
-        // Fall back to local storage
-        final appDir = await getApplicationDocumentsDirectory();
-        final fileName =
-            'img_${DateTime.now().millisecondsSinceEpoch}_${image.name}';
-        final File newImage = File('${appDir.path}/$fileName');
-        await File(image.path).copy(newImage.path);
+      await storageRef.putFile(File(image.path));
+      final imageUrl = await storageRef.getDownloadURL();
 
-        final message = Message(
-          sender: widget.yourName,
-          content: '',
-          timestamp: DateTime.now(),
-          imageUrl: newImage.path,
-        );
-
-        final prefs = await SharedPreferences.getInstance();
-        final messagesJson = prefs.getStringList('messages') ?? [];
-        messagesJson.add(jsonEncode(message.toJson()));
-        await prefs.setStringList('messages', messagesJson);
-        setState(() {});
-      }
+      await msgRef.set({
+        'senderUid': widget.myUid,
+        'senderUsername': widget.myUsername,
+        'type': 'image',
+        'text': '',
+        'imageUrl': imageUrl,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
 
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Image sent!')));
+      ).showSnackBar(const SnackBar(content: Text('Image envoyée')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error sending image: $e')));
+      ).showSnackBar(SnackBar(content: Text('Erreur envoi image: $e')));
     }
   }
 
-  Future<List<Message>> _loadLocalMessages() async {
-    final prefs = await SharedPreferences.getInstance();
-    final messagesJson = prefs.getStringList('messages') ?? [];
-    return messagesJson
-        .map((json) => Message.fromJson(jsonDecode(json)))
-        .toList();
-  }
-
-  Widget _buildEmptyState(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.chat_bubble_outline, size: 64, color: Colors.grey),
-          const SizedBox(height: 16),
-          Text(
-            'No messages yet',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(color: Colors.grey),
-          ),
-          const SizedBox(height: 8),
-          const Text('Send your first message!'),
-        ],
-      ),
-    );
+  Future<void> _leavePair() async {
+    await _firestore.collection('users').doc(widget.myUid).update({
+      'activePairId': null,
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('${widget.yourName} & ${widget.partnerName}'),
-        centerTitle: true,
-        foregroundColor: Colors.white,
-        backgroundColor: Colors.pink,
-        elevation: 0,
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => HomeGameScreen(
-                controller: _coupleGameController,
-                yourName: widget.yourName,
-                partnerName: widget.partnerName,
+    final pairStream = _firestore
+        .collection('pairs')
+        .doc(widget.pairId)
+        .snapshots();
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: pairStream,
+      builder: (context, pairSnapshot) {
+        if (pairSnapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final pairData = pairSnapshot.data?.data();
+        if (pairData == null) {
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('Pair introuvable'),
+              backgroundColor: Colors.pink,
+              foregroundColor: Colors.white,
+            ),
+            body: Center(
+              child: ElevatedButton(
+                onPressed: _leavePair,
+                child: const Text('Revenir à la recherche'),
               ),
             ),
           );
-        },
-        icon: const Text('💑', style: TextStyle(fontSize: 18)),
-        label: const Text('Nous Deux'),
-        backgroundColor: Colors.pink,
-        foregroundColor: Colors.white,
-      ),
-      body: _conversationId == null
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                Expanded(
-                  child: _useFirebase && _firestore != null
-                      ? StreamBuilder<QuerySnapshot>(
-                          stream: _firestore!
-                              .collection('conversations')
-                              .doc(_conversationId)
-                              .collection('messages')
-                              .orderBy('timestamp', descending: true)
-                              .snapshots(),
-                          builder: (context, snapshot) {
-                            if (snapshot.hasError) {
-                              return Center(
-                                child: Text('Error: ${snapshot.error}'),
-                              );
-                            }
+        }
 
-                            if (snapshot.connectionState ==
-                                ConnectionState.waiting) {
-                              return const Center(
-                                child: CircularProgressIndicator(),
-                              );
-                            }
+        final members = (pairData['members'] as List<dynamic>? ?? [])
+            .map((e) => '$e')
+            .toList();
+        final partnerUid = members.firstWhere(
+          (uid) => uid != widget.myUid,
+          orElse: () => '',
+        );
 
-                            final messages = snapshot.data?.docs ?? [];
+        final usernames =
+            (pairData['memberUsernames'] as Map<String, dynamic>? ?? {}).map(
+              (key, value) => MapEntry(key, '$value'),
+            );
+        final partnerName = usernames[partnerUid] ?? 'partner';
 
-                            if (messages.isEmpty) {
-                              return _buildEmptyState(context);
-                            }
+        return Scaffold(
+          appBar: AppBar(
+            title: Text('${widget.myUsername} & $partnerName'),
+            centerTitle: true,
+            backgroundColor: Colors.pink,
+            foregroundColor: Colors.white,
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.logout),
+                onPressed: () => FirebaseAuth.instance.signOut(),
+              ),
+            ],
+          ),
+          body: Column(
+            children: [
+              Expanded(
+                child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                  stream: _firestore
+                      .collection('pairs')
+                      .doc(widget.pairId)
+                      .collection('messages')
+                      .orderBy('createdAt', descending: true)
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
 
-                            return ListView.builder(
-                              reverse: true,
-                              itemCount: messages.length,
-                              itemBuilder: (context, index) {
-                                final messageData =
-                                    messages[index].data()
-                                        as Map<String, dynamic>;
-                                final message = Message(
-                                  sender: messageData['sender'] ?? '',
-                                  content: messageData['content'] ?? '',
-                                  timestamp: messageData['timestamp'] != null
-                                      ? (messageData['timestamp'] as Timestamp)
-                                            .toDate()
-                                      : DateTime.now(),
-                                  imageUrl: messageData['imageUrl'],
-                                );
-                                final isYou = message.sender == widget.yourName;
+                    if (snapshot.hasError) {
+                      return Center(child: Text('Erreur: ${snapshot.error}'));
+                    }
 
-                                return MessageBubble(
-                                  message: message,
-                                  isYou: isYou,
-                                );
-                              },
-                            );
-                          },
-                        )
-                      : FutureBuilder<List<Message>>(
-                          future: _loadLocalMessages(),
-                          builder: (context, snapshot) {
-                            if (snapshot.connectionState ==
-                                ConnectionState.waiting) {
-                              return const Center(
-                                child: CircularProgressIndicator(),
-                              );
-                            }
+                    final docs = snapshot.data?.docs ?? [];
+                    if (docs.isEmpty) {
+                      return const Center(
+                        child: Text('Aucun message pour le moment.'),
+                      );
+                    }
 
-                            final messages = snapshot.data ?? [];
+                    return ListView.builder(
+                      reverse: true,
+                      itemCount: docs.length,
+                      itemBuilder: (context, index) {
+                        final data = docs[index].data();
+                        final message = Message(
+                          senderUid: data['senderUid'] as String? ?? '',
+                          senderName: data['senderUsername'] as String? ?? '',
+                          type: data['type'] as String? ?? 'text',
+                          content: data['text'] as String? ?? '',
+                          imageUrl: data['imageUrl'] as String?,
+                          timestamp: data['createdAt'] is Timestamp
+                              ? (data['createdAt'] as Timestamp).toDate()
+                              : DateTime.now(),
+                        );
 
-                            if (messages.isEmpty) {
-                              return _buildEmptyState(context);
-                            }
-
-                            return ListView.builder(
-                              reverse: true,
-                              itemCount: messages.length,
-                              itemBuilder: (context, index) {
-                                final message =
-                                    messages[messages.length - 1 - index];
-                                final isYou = message.sender == widget.yourName;
-
-                                return MessageBubble(
-                                  message: message,
-                                  isYou: isYou,
-                                );
-                              },
-                            );
-                          },
-                        ),
+                        return MessageBubble(
+                          message: message,
+                          isYou: message.senderUid == widget.myUid,
+                        );
+                      },
+                    );
+                  },
                 ),
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  child: Row(
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.image),
-                        color: Colors.pink,
-                        onPressed: _sendImage,
-                      ),
-                      Expanded(
-                        child: TextField(
-                          controller: _messageController,
-                          decoration: InputDecoration(
-                            hintText: 'Type a message...',
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(24),
-                              borderSide: const BorderSide(color: Colors.pink),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
-                            ),
+              ),
+              Container(
+                padding: const EdgeInsets.all(8),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.image),
+                      color: Colors.pink,
+                      onPressed: _sendImage,
+                    ),
+                    Expanded(
+                      child: TextField(
+                        controller: _messageController,
+                        decoration: InputDecoration(
+                          hintText: 'Type a message...',
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            borderSide: const BorderSide(color: Colors.pink),
                           ),
-                          maxLines: null,
-                          textInputAction: TextInputAction.send,
-                          onSubmitted: (text) {
-                            _sendMessage(text);
-                          },
                         ),
+                        maxLines: null,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: _sendMessage,
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.send),
-                        color: Colors.pink,
-                        onPressed: () {
-                          _sendMessage(_messageController.text);
-                        },
-                      ),
-                    ],
-                  ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.send),
+                      color: Colors.pink,
+                      onPressed: () => _sendMessage(_messageController.text),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -561,10 +1129,10 @@ class _ChatScreenState extends State<ChatScreen> {
 }
 
 class MessageBubble extends StatelessWidget {
+  const MessageBubble({super.key, required this.message, required this.isYou});
+
   final Message message;
   final bool isYou;
-
-  const MessageBubble({super.key, required this.message, required this.isYou});
 
   @override
   Widget build(BuildContext context) {
@@ -577,28 +1145,34 @@ class MessageBubble extends StatelessWidget {
               ? CrossAxisAlignment.end
               : CrossAxisAlignment.start,
           children: [
-            if (message.imageUrl != null && message.imageUrl!.isNotEmpty)
+            Text(
+              message.senderName,
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: Colors.grey[700]),
+            ),
+            if (message.type == 'image' &&
+                message.imageUrl != null &&
+                message.imageUrl!.isNotEmpty)
               Container(
-                constraints: const BoxConstraints(maxWidth: 250),
+                constraints: const BoxConstraints(maxWidth: 260),
                 margin: const EdgeInsets.symmetric(vertical: 4),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(12),
-                  child: message.imageUrl!.startsWith('http')
-                      ? Image.network(
-                          message.imageUrl!,
-                          fit: BoxFit.cover,
-                          loadingBuilder: (context, child, loadingProgress) {
-                            if (loadingProgress == null) return child;
-                            return const Padding(
-                              padding: EdgeInsets.all(8.0),
-                              child: CircularProgressIndicator(),
-                            );
-                          },
-                        )
-                      : Image.file(File(message.imageUrl!), fit: BoxFit.cover),
+                  child: Image.network(
+                    message.imageUrl!,
+                    fit: BoxFit.cover,
+                    loadingBuilder: (context, child, loadingProgress) {
+                      if (loadingProgress == null) return child;
+                      return const Padding(
+                        padding: EdgeInsets.all(10),
+                        child: CircularProgressIndicator(),
+                      );
+                    },
+                  ),
                 ),
               ),
-            if (message.content.isNotEmpty)
+            if (message.type == 'text' && message.content.isNotEmpty)
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 16,
@@ -631,33 +1205,19 @@ class MessageBubble extends StatelessWidget {
 }
 
 class Message {
-  final String sender;
-  final String content;
-  final DateTime timestamp;
-  final String? imageUrl;
-
-  Message({
-    required this.sender,
+  const Message({
+    required this.senderUid,
+    required this.senderName,
+    required this.type,
     required this.content,
     required this.timestamp,
     this.imageUrl,
   });
 
-  Map<String, dynamic> toJson() {
-    return {
-      'sender': sender,
-      'content': content,
-      'timestamp': timestamp.toIso8601String(),
-      'imageUrl': imageUrl,
-    };
-  }
-
-  factory Message.fromJson(Map<String, dynamic> json) {
-    return Message(
-      sender: json['sender'] as String,
-      content: json['content'] as String? ?? '',
-      timestamp: DateTime.parse(json['timestamp'] as String),
-      imageUrl: json['imageUrl'] as String?,
-    );
-  }
+  final String senderUid;
+  final String senderName;
+  final String type;
+  final String content;
+  final DateTime timestamp;
+  final String? imageUrl;
 }

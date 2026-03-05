@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:math';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
@@ -11,17 +13,43 @@ import '../services/couple_game_storage.dart';
 class CoupleGameController extends ChangeNotifier {
   static const String waitingPartnerText = '(en attente de ta moitié...)';
 
-  CoupleGameController({required CoupleGameStorage storage})
-    : _storage = storage;
+  CoupleGameController.local({required CoupleGameStorage storage})
+    : _storage = storage,
+      _firestore = null,
+      pairId = null,
+      currentUid = null,
+      partnerUid = null;
 
-  final CoupleGameStorage _storage;
+  CoupleGameController.online({
+    required FirebaseFirestore firestore,
+    required this.pairId,
+    required this.currentUid,
+    required this.partnerUid,
+  }) : _firestore = firestore,
+       _storage = null;
+
+  final CoupleGameStorage? _storage;
+  final FirebaseFirestore? _firestore;
+
+  final String? pairId;
+  final String? currentUid;
+  final String? partnerUid;
 
   final DateFormat _dateKeyFormat = DateFormat('yyyy-MM-dd');
   final Random _random = Random();
 
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _pairSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _answersSub;
+
   bool isLoading = true;
   int score = 0;
   List<Answer> answers = [];
+
+  bool get _isOnlineMode =>
+      _firestore != null &&
+      pairId != null &&
+      currentUid != null &&
+      partnerUid != null;
 
   List<DailyQuestion> get questions => CoupleQuestions.all;
 
@@ -29,12 +57,68 @@ class CoupleGameController extends ChangeNotifier {
     isLoading = true;
     notifyListeners();
 
-    score = await _storage.loadScore();
-    answers = await _storage.loadAnswers();
-    answers.sort((a, b) => b.date.compareTo(a.date));
+    if (_isOnlineMode) {
+      _attachRealtimeListeners();
+    } else {
+      final storage = _storage;
+      if (storage == null) {
+        isLoading = false;
+        notifyListeners();
+        return;
+      }
+      score = await storage.loadScore();
+      answers = await storage.loadAnswers();
+      answers.sort((a, b) => b.date.compareTo(a.date));
+      isLoading = false;
+      notifyListeners();
+    }
+  }
 
-    isLoading = false;
-    notifyListeners();
+  void _attachRealtimeListeners() {
+    _pairSub?.cancel();
+    _answersSub?.cancel();
+
+    final firestore = _firestore!;
+    final pairRef = firestore.collection('pairs').doc(pairId);
+
+    _pairSub = pairRef.snapshots().listen((snapshot) {
+      final data = snapshot.data();
+      if (data != null) {
+        score = (data['compatibilityScore'] as num?)?.toInt() ?? 0;
+      }
+      isLoading = false;
+      notifyListeners();
+    });
+
+    _answersSub = pairRef
+        .collection('daily_quiz_answers')
+        .orderBy(FieldPath.documentId, descending: true)
+        .snapshots()
+        .listen((snapshot) {
+          answers = snapshot.docs
+              .map((doc) {
+                final data = doc.data();
+                final date = DateTime.tryParse(doc.id) ?? DateTime.now();
+                final mapAnswers =
+                    (data['answers'] as Map<String, dynamic>? ?? {});
+                final my = (mapAnswers[currentUid] as String?) ?? '';
+                final partner =
+                    (mapAnswers[partnerUid] as String?) ?? waitingPartnerText;
+
+                return Answer(
+                  questionId: (data['questionId'] as num?)?.toInt() ?? 0,
+                  myAnswer: my,
+                  partnerAnswer: partner,
+                  date: date,
+                );
+              })
+              .where((a) => a.questionId > 0)
+              .toList();
+
+          answers.sort((a, b) => b.date.compareTo(a.date));
+          isLoading = false;
+          notifyListeners();
+        });
   }
 
   DailyQuestion get todayQuestion {
@@ -61,7 +145,11 @@ class CoupleGameController extends ChangeNotifier {
     return null;
   }
 
-  bool get hasAnsweredToday => todayAnswer != null;
+  bool get hasAnsweredToday {
+    final answer = todayAnswer;
+    if (answer == null) return false;
+    return answer.myAnswer.trim().isNotEmpty;
+  }
 
   DailyQuestion? findQuestionById(int id) {
     try {
@@ -90,6 +178,11 @@ class CoupleGameController extends ChangeNotifier {
       return;
     }
 
+    if (_isOnlineMode) {
+      await _submitOnlineAnswer(sanitized);
+      return;
+    }
+
     final now = DateTime.now();
     final existingToday = todayAnswer;
 
@@ -109,11 +202,55 @@ class CoupleGameController extends ChangeNotifier {
         ),
       );
       score += 10;
-      await _storage.saveScore(score);
+      final storage = _storage;
+      if (storage != null) {
+        await storage.saveScore(score);
+      }
     }
 
-    await _storage.saveAnswers(answers);
+    final storage = _storage;
+    if (storage != null) {
+      await storage.saveAnswers(answers);
+    }
     notifyListeners();
+  }
+
+  Future<void> _submitOnlineAnswer(String sanitized) async {
+    final firestore = _firestore!;
+    final pairRef = firestore.collection('pairs').doc(pairId);
+    final quizRef = pairRef.collection('daily_quiz_answers').doc(todayKey);
+
+    await firestore.runTransaction((tx) async {
+      final quizSnap = await tx.get(quizRef);
+      final pairSnap = await tx.get(pairRef);
+
+      final existingQuiz = quizSnap.data() ?? {};
+      final existingAnswers =
+          (existingQuiz['answers'] as Map<String, dynamic>? ?? {}).map(
+            (key, value) => MapEntry(key, '$value'),
+          );
+
+      existingAnswers[currentUid!] = sanitized;
+
+      tx.set(quizRef, {
+        'questionId': todayQuestion.id,
+        'answers': existingAnswers,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      final partnerAnswer = existingAnswers[partnerUid!];
+      final alreadyScored = (existingQuiz['scored'] as bool?) ?? false;
+
+      if (!alreadyScored &&
+          partnerAnswer != null &&
+          partnerAnswer.trim().isNotEmpty) {
+        final pairData = pairSnap.data() ?? {};
+        final currentScore =
+            (pairData['compatibilityScore'] as num?)?.toInt() ?? 0;
+        tx.update(pairRef, {'compatibilityScore': currentScore + 10});
+        tx.set(quizRef, {'scored': true}, SetOptions(merge: true));
+      }
+    });
   }
 
   String randomPromptForPartner() {
@@ -124,5 +261,12 @@ class CoupleGameController extends ChangeNotifier {
       'Suspense amoureux en cours ✨',
     ];
     return prompts[_random.nextInt(prompts.length)];
+  }
+
+  @override
+  void dispose() {
+    _pairSub?.cancel();
+    _answersSub?.cancel();
+    super.dispose();
   }
 }

@@ -38,13 +38,17 @@ dependencies:
   # For messaging app
   image_picker: ^1.0.0
   shared_preferences: ^2.2.0
-  intl: ^0.19.0
-  firebase_core: ^2.24.0
-  cloud_firestore: ^4.13.0
-  firebase_storage: ^11.5.0
-  flutter_dotenv: ^5.1.0
+  intl: ^0.20.2
+  firebase_core: ^4.5.0
+  cloud_firestore: ^6.1.3
+  firebase_storage: ^13.1.0
+  firebase_auth: ^6.2.0
+  firebase_messaging: ^16.1.2
+  firebase_app_check: ^0.4.1+5
+  flutter_local_notifications: ^20.1.0
+  flutter_dotenv: ^6.0.0
   path_provider: ^2.1.0
-  google_fonts: ^6.2.1
+  google_fonts: ^8.0.2
   animated_text_kit: ^4.2.3
   confetti: ^0.8.0
 
@@ -57,7 +61,8 @@ dev_dependencies:
   # activated in the `analysis_options.yaml` file located at the root of your
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
-  flutter_lints: ^5.0.0
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -70,9 +75,16 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - .env
+  assets:
+    - .env
+    - assets/icons/love_app_icon.png
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/icons/love_app_icon.png
+  adaptive_icon_background: "#FDE7EF"
+  adaptive_icon_foreground: assets/icons/love_app_icon.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

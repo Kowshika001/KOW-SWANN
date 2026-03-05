@@ -1,0 +1,12 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    match /pairs/{pairId}/chat/{fileName} {
+      allow read, write: if isSignedIn();
+    }
+  }
+}

@@ -1,4 +1,4 @@
-package com.example.love_app
+package kowshika.app
 
 import io.flutter.embedding.android.FlutterActivity
 
