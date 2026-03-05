@@ -61,7 +61,7 @@ jobs:
   publish_release:
     name: Attach APK to GitHub release
     needs: build
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
     steps:
       - name: Download APK artifact
