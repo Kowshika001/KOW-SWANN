@@ -1,60 +1,31 @@
 #include <iostream>
 #include <vector>
 #include <queue>
+#include <list>
 #include <algorithm>
+#include <cmath>
+#include <set>
+
+// Define PI for circularity calculation
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 // Structure to hold pixel coordinates
 struct Point {
     int r, c;
 };
 
-// Structure to hold information about a detected object
+// Structure to hold information about a detected component/object
 struct DetectedObject {
+    int id;
+    std::vector<Point> pixels;
+    int pixel_count = 0;
     int min_r, max_r, min_c, max_c; // Bounding box
-    int pixel_count;
-    std::vector<Point> pixels; // Pixels belonging to the object
 };
 
-// Function to print the image with bounding boxes
-void printImageWithBoundingBox(const std::vector<std::vector<int>>& image, const std::vector<DetectedObject>& objects) {
-    std::vector<std::string> output_image(image.size(), std::string(image[0].size(), ' '));
-
-    // First, mark the original pixels
-    for (size_t r = 0; r < image.size(); ++r) {
-        for (size_t c = 0; c < image[0].size(); ++c) {
-            if (image[r][c] > 0) {
-                output_image[r][c] = '#';
-            }
-        }
-    }
-
-    // Draw bounding boxes
-    for (const auto& obj : objects) {
-        // Draw top and bottom borders
-        for (int c = obj.min_c; c <= obj.max_c; ++c) {
-            if (output_image[obj.min_r][c] == ' ') output_image[obj.min_r][c] = '-';
-            if (output_image[obj.max_r][c] == ' ') output_image[obj.max_r][c] = '-';
-        }
-        // Draw left and right borders
-        for (int r = obj.min_r; r <= obj.max_r; ++r) {
-            if (output_image[r][obj.min_c] == ' ') output_image[r][obj.min_c] = '|';
-            if (output_image[r][obj.max_c] == ' ') output_image[r][obj.max_c] = '|';
-        }
-        // Draw corners
-        output_image[obj.min_r][obj.min_c] = '+';
-        output_image[obj.min_r][obj.max_c] = '+';
-        output_image[obj.max_r][obj.min_c] = '+';
-        output_image[obj.max_r][obj.max_c] = '+';
-    }
-
-    // Print the final result
-    for (const auto& row : output_image) {
-        std::cout << row << std::endl;
-    }
-}
-
-// BFS-based object detection function
-std::vector<DetectedObject> detectObjects(const std::vector<std::vector<int>>& image, int threshold) {
+// 1.2 Connected Component Detection (BFS-based)
+std::vector<DetectedObject> detectComponents(const std::vector<std::vector<int>>& image, int threshold) {
     if (image.empty() || image[0].empty()) {
         return {};
     }
@@ -62,21 +33,23 @@ std::vector<DetectedObject> detectObjects(const std::vector<std::vector<int>>& i
     int rows = image.size();
     int cols = image[0].size();
     std::vector<std::vector<bool>> visited(rows, std::vector<bool>(cols, false));
-    std::vector<DetectedObject> detected_objects;
+    std::vector<DetectedObject> components;
+    int component_id = 0;
 
     int dr[] = {-1, 1, 0, 0}; // Directions for row
     int dc[] = {0, 0, -1, 1}; // Directions for column
 
     for (int r = 0; r < rows; ++r) {
         for (int c = 0; c < cols; ++c) {
-            // If pixel is above threshold and not visited, start BFS for a new object
+            // If pixel is above threshold and not visited, start BFS for a new component
             if (image[r][c] > threshold && !visited[r][c]) {
-                DetectedObject current_object;
-                current_object.min_r = r;
-                current_object.max_r = r;
-                current_object.min_c = c;
-                current_object.max_c = c;
-                current_object.pixel_count = 0;
+                component_id++;
+                DetectedObject current_component;
+                current_component.id = component_id;
+                current_component.min_r = r;
+                current_component.max_r = r;
+                current_component.min_c = c;
+                current_component.max_c = c;
                 
                 std::queue<Point> q;
                 q.push({r, c});
@@ -86,12 +59,11 @@ std::vector<DetectedObject> detectObjects(const std::vector<std::vector<int>>& i
                     Point current_pixel = q.front();
                     q.pop();
 
-                    current_object.pixels.push_back(current_pixel);
-                    current_object.pixel_count++;
-                    current_object.min_r = std::min(current_object.min_r, current_pixel.r);
-                    current_object.max_r = std::max(current_object.max_r, current_pixel.r);
-                    current_object.min_c = std::min(current_object.min_c, current_pixel.c);
-                    current_object.max_c = std::max(current_object.max_c, current_pixel.c);
+                    current_component.pixels.push_back(current_pixel);
+                    current_component.min_r = std::min(current_component.min_r, current_pixel.r);
+                    current_component.max_r = std::max(current_component.max_r, current_pixel.r);
+                    current_component.min_c = std::min(current_component.min_c, current_pixel.c);
+                    current_component.max_c = std::max(current_component.max_c, current_pixel.c);
 
                     // Check neighbors
                     for (int i = 0; i < 4; ++i) {
@@ -105,77 +77,131 @@ std::vector<DetectedObject> detectObjects(const std::vector<std::vector<int>>& i
                         }
                     }
                 }
-                detected_objects.push_back(current_object);
+                current_component.pixel_count = current_component.pixels.size();
+                components.push_back(current_component);
             }
         }
     }
-    return detected_objects;
+    return components;
 }
 
-// Function to classify objects and print information
-void classifyAndPrintObjects(const std::vector<DetectedObject>& objects) {
-    std::cout << "Detected " << objects.size() << " object(s)." << std::endl;
-    int i = 1;
-    for (const auto& obj : objects) {
-        int box_area = (obj.max_r - obj.min_r + 1) * (obj.max_c - obj.min_c + 1);
-        float density = static_cast<float>(obj.pixel_count) / box_area;
+// Helper to calculate perimeter for circularity
+double calculatePerimeter(const DetectedObject& obj) {
+    std::set<std::pair<int, int>> pixel_set;
+    for(const auto& p : obj.pixels) {
+        pixel_set.insert({p.r, p.c});
+    }
 
-        std::cout << "\n--- Object " << i << " ---" << std::endl;
-        std::cout << "Bounding Box: (" << obj.min_r << "," << obj.min_c << ") to (" 
-                  << obj.max_r << "," << obj.max_c << ")" << std::endl;
-        std::cout << "Pixel Count: " << obj.pixel_count << std::endl;
-        std::cout << "Bounding Box Area: " << box_area << std::endl;
-        std::cout << "Density: " << density << std::endl;
+    int perimeter = 0;
+    int dr[] = {-1, 1, 0, 0}; // Directions for row
+    int dc[] = {0, 0, -1, 1}; // Directions for column
 
-        // Simple classification based on density
-        if (density > 0.9) {
-            std::cout << "Classification: Likely a solid/rectangular object." << std::endl;
-        } else {
-            // A simple heuristic for circles is that their density is around PI/4 (~0.785)
-            if (density > 0.6 && density < 0.85) {
-                 std::cout << "Classification: Potentially a circular or irregular blob." << std::endl;
-            } else {
-                 std::cout << "Classification: Irregularly shaped object." << std::endl;
+    for (const auto& p : obj.pixels) {
+        for (int i = 0; i < 4; ++i) {
+            int nr = p.r + dr[i];
+            int nc = p.c + dc[i];
+            if (pixel_set.find({nr, nc}) == pixel_set.end()) {
+                perimeter++;
             }
         }
-        i++;
+    }
+    return perimeter;
+}
+
+// 1.5 Filtering Valid Shapes
+std::vector<DetectedObject> filterValidShapes(const std::vector<DetectedObject>& components) {
+    std::vector<DetectedObject> valid_shapes;
+
+    for (const auto& region : components) {
+        bool is_rectangle = false;
+        bool is_circle = false;
+
+        // 1.3 Rectangle Detection
+        int box_width = region.max_c - region.min_c + 1;
+        int box_height = region.max_r - region.min_r + 1;
+        long box_area = (long)box_width * box_height;
+        if (box_area == region.pixel_count) {
+            is_rectangle = true;
+        }
+
+        // 1.4 Circle Detection
+        double aspect_ratio = static_cast<double>(box_width) / box_height;
+        // Check if bounding box is reasonably square-like
+        if (aspect_ratio > 0.75 && aspect_ratio < 1.33) {
+            double area = region.pixel_count;
+            double perimeter = calculatePerimeter(region);
+            if (perimeter > 0) {
+                double circularity = (4 * M_PI * area) / (perimeter * perimeter);
+                if (circularity > 0.7) { // Threshold for circularity
+                    is_circle = true;
+                }
+            }
+        }
+        
+        if (is_rectangle || is_circle) {
+            valid_shapes.push_back(region);
+        }
+    }
+    return valid_shapes;
+}
+
+// 1.6 Output Generation
+void generateOutputImage(const std::vector<std::vector<int>>& original_image, const std::vector<DetectedObject>& valid_shapes) {
+    if (original_image.empty()) return;
+    std::vector<std::vector<int>> output_image(original_image.size(), std::vector<int>(original_image[0].size(), 0));
+
+    for (const auto& shape : valid_shapes) {
+        for (const auto& pixel : shape.pixels) {
+            output_image[pixel.r][pixel.c] = original_image[pixel.r][pixel.c];
+        }
+    }
+    
+    std::cout << "\n(b) Detected Shapes:" << std::endl;
+    for (const auto& row : output_image) {
+        for(int val : row) {
+            std::cout << (val > 0 ? "#" : ".");
+        }
+        std::cout << std::endl;
     }
 }
 
+void printInputImage(const std::vector<std::vector<int>>& image) {
+    std::cout << "(a) Input Image:" << std::endl;
+    for (const auto& row : image) {
+        for(int val : row) {
+            std::cout << (val > 0 ? "#" : ".");
+        }
+        std::cout << std::endl;
+    }
+}
 
 int main() {
-    std::cout << "********* Example 1: Rectangular Object *********" << std::endl;
+    std::cout << "IC253 Assignment 1 - Task 1\n";
+    std::cout << "---------------------------\n\n";
+
+    // 1.9 Test Case 1: Simple Geometric Shapes
+    std::cout << "1.9 Test Case 1: Simple Geometric Shapes\n";
     std::vector<std::vector<int>> image1 = {
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 150, 160, 155, 150, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 155, 165, 160, 155, 0, 0, 200, 210, 0, 0, 0},
-        {0, 0, 160, 170, 165, 160, 0, 0, 210, 200, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 150, 150, 150, 150, 0, 0, 0, 0, 150, 150, 0, 0, 0, 0, 0},
+        {0, 0, 150, 150, 150, 150, 0, 0, 0, 150, 150, 150, 150, 0, 0, 0, 0},
+        {0, 0, 150, 150, 150, 150, 0, 0, 150, 150, 150, 150, 150, 150, 0, 0, 0},
+        {0, 0, 150, 150, 150, 150, 0, 0, 0, 150, 150, 150, 150, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 150, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 150, 0, 0, 0, 0, 0, 0, 0}, // An invalid shape to be filtered
+        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
     };
 
-    int intensity_threshold = 100;
-    auto objects1 = detectObjects(image1, intensity_threshold);
-    classifyAndPrintObjects(objects1);
-    std::cout << "\nOutput Image:" << std::endl;
-    printImageWithBoundingBox(image1, objects1);
-
-
-    std::cout << "\n\n********* Example 2: Circular/Irregular Object *********" << std::endl;
-    std::vector<std::vector<int>> image2 = {
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-        {0, 0, 0, 180, 190, 185, 0, 0, 0, 0, 0},
-        {0, 0, 180, 190, 200, 195, 180, 0, 0, 0, 0},
-        {0, 190, 200, 210, 205, 200, 195, 185, 0, 0, 0},
-        {0, 0, 180, 190, 200, 195, 180, 0, 0, 0, 0},
-        {0, 0, 0, 180, 190, 185, 0, 0, 0, 0, 0},
-        {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-    };
+    printInputImage(image1);
     
-    auto objects2 = detectObjects(image2, intensity_threshold);
-    classifyAndPrintObjects(objects2);
-    std::cout << "\nOutput Image:" << std::endl;
-    printImageWithBoundingBox(image2, objects2);
+    int intensity_threshold = 100;
+    auto components1 = detectComponents(image1, intensity_threshold);
+    auto valid_shapes1 = filterValidShapes(components1);
+    
+    generateOutputImage(image1, valid_shapes1);
 
+    std::cout << "\nAlgorithm detected " << valid_shapes1.size() << " valid shape(s)." << std::endl;
+    
     return 0;
 }

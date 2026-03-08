@@ -3,213 +3,194 @@
 #include <list>
 #include <map>
 #include <set>
-#include <numeric>
+#include <queue>
 
-// Struct for a node in the sparse linked list
+// 2.1 Sparse Matrix Representation Node
 struct SparseNode {
-    int row, col;
+    int row, col, value;
 };
 
-// A map to represent disjoint sets for connected components
-// (Implements a simplified union-find)
-using DisjointSets = std::map<int, int>;
+// A region is a collection of nodes forming a connected component
+using Region = std::vector<SparseNode>;
 
-// Function to find the representative of a set
-int find_set(DisjointSets& ds, int i) {
-    if (ds.find(i) == ds.end() || ds[i] == i)
-        return i;
-    return ds[i] = find_set(ds, ds[i]);
-}
+// Forward declaration
+void printMatrix(const std::vector<std::vector<int>>& matrix, const std::string& title);
 
-// Function to unite two sets
-void unite_sets(DisjointSets& ds, int i, int j) {
-    int root_i = find_set(ds, i);
-    int root_j = find_set(ds, j);
-    if (root_i != root_j) {
-        ds[root_i] = root_j;
-    }
-}
-
-// Main class to handle the sparse image representation
 class SparseImage {
 public:
     int rows, cols;
-    std::list<SparseNode> pixels;
+    std::list<SparseNode> pixel_list;
 
+    // Constructor from dense matrix
     SparseImage(const std::vector<std::vector<int>>& dense_matrix) {
         rows = dense_matrix.size();
-        cols = dense_matrix[0].size();
+        if (rows > 0) cols = dense_matrix[0].size();
+        else cols = 0;
+
         for (int r = 0; r < rows; ++r) {
             for (int c = 0; c < cols; ++c) {
                 if (dense_matrix[r][c] != 0) {
-                    pixels.push_back({r, c});
+                    pixel_list.push_back({r, c, dense_matrix[r][c]});
                 }
             }
         }
     }
 
-    // Print the sparse list representation
-    void printSparse() const {
-        std::cout << "Sparse Matrix Representation (row, col):" << std::endl;
-        for (const auto& node : pixels) {
-            std::cout << "(" << node.row << ", " << node.col << ") -> ";
-        }
-        std::cout << "NULL" << std::endl;
-    }
-    
     // Helper to get a unique key for a pixel
-    int get_pixel_key(int r, int c) const {
+    int getPixelKey(int r, int c) const {
         return r * cols + c;
     }
 
-    // 1. Identify distinct objects and compute their areas
-    void analyzeObjects() const {
-        if (pixels.empty()) {
-            std::cout << "No objects found." << std::endl;
-            return;
-        }
-
-        DisjointSets ds;
-        std::map<int, SparseNode> key_to_node;
-        for(const auto& p : pixels) {
-            key_to_node[get_pixel_key(p.row, p.col)] = p;
-        }
-
-        for (const auto& node : pixels) {
-            int p_key = get_pixel_key(node.row, node.col);
-            // Check neighbor to the top
-            if (node.row > 0 && key_to_node.count(get_pixel_key(node.row - 1, node.col))) {
-                unite_sets(ds, p_key, get_pixel_key(node.row-1, node.col));
-            }
-            // Check neighbor to the left
-            if (node.col > 0 && key_to_node.count(get_pixel_key(node.row, node.col - 1))) {
-                unite_sets(ds, p_key, get_pixel_key(node.row, node.col - 1));
+    // 2.1 Sparse Matrix Representation Output
+    void printSparseRepresentation() const {
+        std::cout << "Sparse Representation" << std::endl;
+        for (auto it = pixel_list.begin(); it != pixel_list.end(); ++it) {
+            std::cout << "(" << it->row << ", " << it->col << ")";
+            if (std::next(it) != pixel_list.end()) {
+                std::cout << " -> ";
             }
         }
-
-        std::map<int, int> object_areas;
-        for (const auto& node : pixels) {
-            object_areas[find_set(ds, get_pixel_key(node.row, node.col))]++;
-        }
-
-        std::cout << "\nNumber of connected components detected: " << object_areas.size() << std::endl;
-        int i = 1;
-        for (const auto& pair : object_areas) {
-            std::cout << "Object " << i++ << " area: " << pair.second << " pixels" << std::endl;
-        }
+        std::cout << "\n" << std::endl;
     }
 
-    // 2. Detect and list edge pixels
-    void detectBoundary() const {
-        std::set<int> pixel_keys;
-        for(const auto& p : pixels) {
-            pixel_keys.insert(get_pixel_key(p.row, p.col));
+    // 2.2 Detection of Connected Components using BFS
+    std::vector<Region> detectConnectedComponents() const {
+        std::vector<Region> all_regions;
+        std::set<int> all_pixel_keys;
+        for (const auto& node : pixel_list) {
+            all_pixel_keys.insert(getPixelKey(node.row, node.col));
         }
 
-        std::cout << "\nBoundary pixels (row, col):" << std::endl;
-        bool first = true;
-        for (const auto& node : pixels) {
-            int dr[] = {-1, 1, 0, 0};
-            int dc[] = {0, 0, -1, 1};
-            bool is_boundary = false;
-            for(int i=0; i<4; ++i) {
-                int nr = node.row + dr[i];
-                int nc = node.col + dc[i];
-                 // A pixel is a boundary if it has a background neighbor (0).
-                 // A background neighbor is one that is NOT in our set of foreground pixels.
-                if (nr < 0 || nr >= rows || nc < 0 || nc >= cols || !pixel_keys.count(get_pixel_key(nr, nc))) {
-                    is_boundary = true;
-                    break;
+        std::map<int, bool> visited;
+        for (const auto& start_node : pixel_list) {
+            int start_key = getPixelKey(start_node.row, start_node.col);
+            if (visited.find(start_key) == visited.end()) {
+                Region current_region;
+                std::queue<SparseNode> q;
+                
+                q.push(start_node);
+                visited[start_key] = true;
+
+                int dr[] = {-1, 1, 0, 0};
+                int dc[] = {0, 0, -1, 1};
+
+                while(!q.empty()) {
+                    SparseNode current_node = q.front();
+                    q.pop();
+                    current_region.push_back(current_node);
+
+                    for (int i=0; i<4; ++i) {
+                        int nr = current_node.row + dr[i];
+                        int nc = current_node.col + dc[i];
+                        int neighbor_key = getPixelKey(nr, nc);
+
+                        // Check if neighbor is a foreground pixel and not visited
+                        if (all_pixel_keys.count(neighbor_key) && visited.find(neighbor_key) == visited.end()) {
+                            visited[neighbor_key] = true;
+                            // We need to find the actual node to push to queue
+                            for(const auto& potential_neighbor : pixel_list) {
+                                if(potential_neighbor.row == nr && potential_neighbor.col == nc) {
+                                    q.push(potential_neighbor);
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
-            }
-
-            if (is_boundary) {
-                 if (!first) std::cout << ", ";
-                 std::cout << "(" << node.row << ", " << node.col << ")";
-                 first = false;
+                all_regions.push_back(current_region);
             }
         }
-        std::cout << std::endl;
+        return all_regions;
     }
 
-    // 3. Flip foreground and background pixels
-    SparseImage flip() const {
-        std::vector<std::vector<int>> flipped_dense(rows, std::vector<int>(cols, 1));
-        for(const auto& node : pixels) {
-            flipped_dense[node.row][node.col] = 0;
-        }
-        return SparseImage(flipped_dense);
-    }
-    
-    // 4. Reconstruct the image into matrix form
-    std::vector<std::vector<int>> toDenseMatrix() const {
-        std::vector<std::vector<int>> dense(rows, std::vector<int>(cols, 0));
-        for(const auto& node : pixels) {
-            dense[node.row][node.col] = 1;
-        }
-        return dense;
-    }
-
-    // Helper to print a dense matrix
-    static void printDense(const std::vector<std::vector<int>>& dense_matrix, const std::string& title) {
-        std::cout << "\n" << title << ":" << std::endl;
-        for (const auto& row : dense_matrix) {
-            for (int val : row) {
-                std::cout << val << " ";
+    // 2.5 Image Reconstruction
+    void reconstructAndPrint(const std::vector<Region>& regions) {
+        std::vector<std::vector<int>> recon_matrix(rows, std::vector<int>(cols, 0));
+        int region_id = 1;
+        for (const auto& region : regions) {
+            for (const auto& node : region) {
+                recon_matrix[node.row][node.col] = region_id;
             }
-            std::cout << std::endl;
+            region_id++;
         }
+        printMatrix(recon_matrix, "Reconstructed Matrix");
     }
 };
 
+// 2.3 Area Calculation & 2.4 Boundary Pixel Detection
+void analyzeRegions(const std::vector<Region>& regions) {
+    std::cout << "Detected Regions" << std::endl;
+    int region_id = 1;
+    for (const auto& region : regions) {
+        // Area
+        std::cout << "Region " << region_id << ": Area = " << region.size() << " pixels" << std::endl;
+
+        // Boundary Pixels
+        std::set<std::pair<int, int>> region_pixel_coords;
+        for(const auto& node : region) {
+            region_pixel_coords.insert({node.row, node.col});
+        }
+        
+        std::cout << "  Boundary: ";
+        bool first = true;
+        for (const auto& node : region) {
+             int dr[] = {-1, 1, 0, 0};
+             int dc[] = {0, 0, -1, 1};
+             bool is_boundary = false;
+             for (int i = 0; i < 4; ++i) {
+                 int nr = node.row + dr[i];
+                 int nc = node.col + dc[i];
+                 // Check if neighbor is outside this region
+                 if (region_pixel_coords.find({nr, nc}) == region_pixel_coords.end()) {
+                     is_boundary = true;
+                     break;
+                 }
+             }
+             if (is_boundary) {
+                if(!first) std::cout << ", ";
+                std::cout << "(" << node.row << ", " << node.col << ")";
+                first = false;
+             }
+        }
+        std::cout << "\n" << std::endl;
+        region_id++;
+    }
+}
+
+
+// Helper to print a matrix
+void printMatrix(const std::vector<std::vector<int>>& matrix, const std::string& title) {
+    std::cout << title << std::endl;
+    for (const auto& row : matrix) {
+        for (int val : row) {
+            std::cout << val << " ";
+        }
+        std::cout << std::endl;
+    }
+    std::cout << std::endl;
+}
+
 int main() {
-    std::cout << "********* Task 2 Demonstration *********" << std::endl;
-    
-    // Example from prompt
-    std::vector<std::vector<int>> image_matrix = {
-        {1, 1, 0, 0, 0, 1, 0, 0},
-        {0, 1, 0, 0, 0, 1, 0, 0},
-        {0, 0, 0, 1, 1, 0, 0, 0},
-        {0, 0, 0, 1, 1, 0, 1, 1},
-        {1, 0, 0, 0, 0, 0, 1, 0}
+    std::cout << "IC253 Assignment 1 - Task 2\n";
+    std::cout << "---------------------------\n\n";
+
+    // 2.8 Test Case 1
+    std::cout << "2.8 Test Case 1\n\n";
+    std::vector<std::vector<int>> image_matrix1 = {
+        {1, 1, 1, 0, 0, 0, 0},
+        {1, 1, 1, 0, 0, 1, 1},
+        {0, 1, 0, 0, 0, 1, 1},
     };
     
-    SparseImage::printDense(image_matrix, "Original Image Matrix");
+    printMatrix(image_matrix1, "Input Matrix");
 
-    // 1. Convert to sparse representation
-    SparseImage sparse_img(image_matrix);
-    sparse_img.printSparse();
+    SparseImage sparse_img1(image_matrix1);
+    sparse_img1.printSparseRepresentation();
 
-    // 2. Analyze objects
-    sparse_img.analyzeObjects();
-
-    // 3. Detect boundary pixels
-    sparse_img.detectBoundary();
-
-    // 4. Flip pixels
-    std::cout << "\n--- Flipping Image ---";
-    SparseImage flipped_img = sparse_img.flip();
-    flipped_img.printSparse();
-
-    // 5. Reconstruct the flipped image
-    auto reconstructed_matrix = flipped_img.toDenseMatrix();
-    SparseImage::printDense(reconstructed_matrix, "Final Reconstructed (Flipped) Image Matrix");
-
-
-    std::cout << "\n\n********* Second Output Example *********" << std::endl;
-    std::vector<std::vector<int>> image_matrix2 = {
-        {0, 0, 0, 0, 0},
-        {0, 1, 1, 1, 0},
-        {0, 1, 0, 1, 0},
-        {0, 1, 1, 1, 0},
-        {0, 0, 0, 0, 0}
-    };
-
-    SparseImage::printDense(image_matrix2, "Original Image Matrix 2");
-    SparseImage sparse_img2(image_matrix2);
-    sparse_img2.printSparse();
-    sparse_img2.analyzeObjects();
-    sparse_img2.detectBoundary();
+    auto regions1 = sparse_img1.detectConnectedComponents();
+    analyzeRegions(regions1);
+    
+    sparse_img1.reconstructAndPrint(regions1);
 
     return 0;
 }
